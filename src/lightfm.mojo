@@ -1,6 +1,5 @@
 """Compute kernels for hybrid LightFM training, inference, and scoring."""
 
-from std.algorithm.functional import parallelize
 from std.math import exp, floor, log, sqrt
 from std.sys.info import simd_width_of
 
@@ -455,36 +454,16 @@ def mlfm_predict_dense(
     var user_ids = ip(user_ids_addr)
     var item_ids = ip(item_ids_addr)
     var result = fp(result_addr)
-    var workers = min(workers_arg, pairs)
-
-    @parameter
-    def score_partition(partition: Int):
-        var start = partition * pairs // workers
-        var stop = (partition + 1) * pairs // workers
-        for pair in range(start, stop):
-            result[pair] = dense_prediction(
-                user_embeddings,
-                user_biases,
-                item_embeddings,
-                item_biases,
-                Int(user_ids[pair]),
-                Int(item_ids[pair]),
-                components,
-            )
-
-    if pairs >= 32768 and workers > 1:
-        parallelize[score_partition](workers, workers)
-    else:
-        for pair in range(pairs):
-            result[pair] = dense_prediction(
-                user_embeddings,
-                user_biases,
-                item_embeddings,
-                item_biases,
-                Int(user_ids[pair]),
-                Int(item_ids[pair]),
-                components,
-            )
+    for pair in range(pairs):
+        result[pair] = dense_prediction(
+            user_embeddings,
+            user_biases,
+            item_embeddings,
+            item_biases,
+            Int(user_ids[pair]),
+            Int(item_ids[pair]),
+            components,
+        )
 
 
 @export("mlfm_predict")
