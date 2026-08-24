@@ -42,9 +42,10 @@ Pair prediction honors `num_threads`. It stays serial below 32,768 pairs to
 avoid thread-launch overhead and partitions larger independent scoring jobs
 across the requested workers.
 
-No GPU path is included. Prediction is dominated by reading embedding buffers,
-and sparse stochastic training has ordered model-update dependencies, so this
-port keeps buffers on the CPU.
+No GPU path is included. Prediction performs about 0.25 FLOP per byte of
+embedding data read, well below the roughly 2 FLOP/byte level that can justify
+device transfer and launch costs. Sparse stochastic training also has ordered
+model-update dependencies, so this port keeps buffers on the CPU.
 
 BPR and WARP use stochastic negative sampling. Given the same seed, their
 learned arrays are not byte-identical to LightFM's thread-local C RNG, but the
@@ -83,13 +84,13 @@ row. “upstream / Mojo” above 1 means Mojo is faster.
 
 | workload | mojo-lightfm | lightfm 1.17 | upstream / Mojo |
 |---|---:|---:|---:|
-| predict, identity (1M pairs, 32 factors) | 44.30 ms | 202.83 ms | 4.58x |
-| predict, identity (1M pairs, 32 factors, 4 threads) | 21.35 ms | 46.82 ms | 2.19x |
-| predict, hybrid (300k pairs, 32 factors) | 8.85 ms | 43.86 ms | 4.95x |
-| logistic fit (40k interactions, 32 factors) | 18.28 ms | 47.22 ms | 2.58x |
-| BPR fit (20k interactions, 32 factors) | 15.52 ms | 36.99 ms | 2.38x |
-| WARP fit (20k interactions, 32 factors) | 15.00 ms | 38.45 ms | 2.56x |
-| predict_rank (500 users x 2k items) | 30.49 ms | 82.28 ms | 2.70x |
+| predict, identity (1M pairs, 32 factors) | 26.76 ms | 136.51 ms | 5.10x |
+| predict, identity (1M pairs, 32 factors, 4 threads) | 21.87 ms | 42.01 ms | 1.92x |
+| predict, hybrid (300k pairs, 32 factors) | 9.10 ms | 48.06 ms | 5.28x |
+| logistic fit (40k interactions, 32 factors) | 20.36 ms | 56.31 ms | 2.77x |
+| BPR fit (20k interactions, 32 factors) | 15.20 ms | 39.09 ms | 2.57x |
+| WARP fit (20k interactions, 32 factors) | 15.28 ms | 38.08 ms | 2.49x |
+| predict_rank (500 users x 2k items) | 32.11 ms | 84.88 ms | 2.64x |
 
 Re-run the benchmark rather than treating these numbers as portable:
 
@@ -114,8 +115,9 @@ The shared library is one Mojo compilation unit. Prediction scores identity
 features directly from the model's NumPy arrays. For hybrid inputs it composes
 each sparse row once, then reuses those dense representations across all
 requested pairs. Representation accumulation and dot products use native-width
-Float32 SIMD loads and stores with scalar remainder loops. Large pair batches
-can be partitioned across CPU workers.
+Float32 SIMD loads and stores with scalar remainder loops. Pair scoring
+partitions batches of at least 32,768 pairs into independent chunks scheduled
+across the requested CPU workers.
 
 Training performs sparse feature updates in place using AdaGrad or AdaDelta.
 Pairwise BPR and WARP updates share the same representation and gradient path,

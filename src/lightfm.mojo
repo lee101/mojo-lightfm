@@ -1,11 +1,13 @@
 """Compute kernels for hybrid LightFM training, inference, and scoring."""
 
+from max.algorithm import sync_parallelize
 from std.math import exp, floor, log, sqrt
 from std.sys.info import simd_width_of
 
 comptime FPtr = UnsafePointer[Float32, AnyOrigin[mut=True]]
 comptime IPtr = UnsafePointer[Int32, AnyOrigin[mut=True]]
 comptime W = simd_width_of[DType.float32]()
+comptime PREDICT_PARALLEL_THRESHOLD = 32_768
 
 
 def fp(addr: Int) -> FPtr:
@@ -454,16 +456,36 @@ def mlfm_predict_dense(
     var user_ids = ip(user_ids_addr)
     var item_ids = ip(item_ids_addr)
     var result = fp(result_addr)
-    for pair in range(pairs):
-        result[pair] = dense_prediction(
-            user_embeddings,
-            user_biases,
-            item_embeddings,
-            item_biases,
-            Int(user_ids[pair]),
-            Int(item_ids[pair]),
-            components,
-        )
+    var workers = min(max(workers_arg, 1), pairs)
+
+    @parameter
+    def predict_chunk(worker: Int):
+        var start = worker * pairs // workers
+        var stop = (worker + 1) * pairs // workers
+        for pair in range(start, stop):
+            result[pair] = dense_prediction(
+                user_embeddings,
+                user_biases,
+                item_embeddings,
+                item_biases,
+                Int(user_ids[pair]),
+                Int(item_ids[pair]),
+                components,
+            )
+
+    if workers > 1 and pairs >= PREDICT_PARALLEL_THRESHOLD:
+        sync_parallelize[predict_chunk](workers)
+    else:
+        for pair in range(pairs):
+            result[pair] = dense_prediction(
+                user_embeddings,
+                user_biases,
+                item_embeddings,
+                item_biases,
+                Int(user_ids[pair]),
+                Int(item_ids[pair]),
+                components,
+            )
 
 
 @export("mlfm_predict")
