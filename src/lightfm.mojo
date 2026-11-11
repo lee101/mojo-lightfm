@@ -1,6 +1,5 @@
 """Compute kernels for hybrid LightFM training, inference, and scoring."""
 
-from max.algorithm import sync_parallelize
 from std.math import exp, floor, log, sqrt
 from std.sys.info import simd_width_of
 
@@ -43,8 +42,8 @@ def compute_representation(
         var weight = data[position]
         component = 0
         while component + W <= components:
-            var values = result.load[width=W](component)
-            var feature_values = embeddings.load[width=W](
+            var values = result.unsafe_load[width=W](component)
+            var feature_values = embeddings.unsafe_load[width=W](
                 feature * components + component
             )
             result.store(component, values + weight * feature_values)
@@ -62,8 +61,8 @@ def prediction(user: FPtr, item: FPtr, components: Int) -> Float32:
     var component = 0
     while component + W <= components:
         score += (
-            user.load[width=W](component)
-            * item.load[width=W](component)
+            user.unsafe_load[width=W](component)
+            * item.unsafe_load[width=W](component)
         ).reduce_add()
         component += W
     while component < components:
@@ -87,8 +86,8 @@ def dense_prediction(
     var component = 0
     while component + W <= components:
         score += (
-            user_embeddings.load[width=W](user_offset + component)
-            * item_embeddings.load[width=W](item_offset + component)
+            user_embeddings.unsafe_load[width=W](user_offset + component)
+            * item_embeddings.unsafe_load[width=W](item_offset + component)
         ).reduce_add()
         component += W
     while component < components:
@@ -418,10 +417,10 @@ def mlfm_representations(
             var weight = data[position]
             component = 0
             while component + W <= components:
-                var values = result_embeddings.load[width=W](
+                var values = result_embeddings.unsafe_load[width=W](
                     row_offset + component
                 )
-                var feature_values = embeddings.load[width=W](
+                var feature_values = embeddings.unsafe_load[width=W](
                     feature * components + component
                 )
                 result_embeddings.store(
@@ -436,6 +435,31 @@ def mlfm_representations(
             result_biases[row] += weight * biases[feature]
 
 
+def predict_dense_range(
+    user_embeddings: FPtr,
+    user_biases: FPtr,
+    item_embeddings: FPtr,
+    item_biases: FPtr,
+    user_ids: IPtr,
+    item_ids: IPtr,
+    result: FPtr,
+    pairs: Int,
+    components: Int,
+    start: Int,
+    stop: Int,
+):
+    for pair in range(start, stop):
+        result[pair] = dense_prediction(
+            user_embeddings,
+            user_biases,
+            item_embeddings,
+            item_biases,
+            Int(user_ids[pair]),
+            Int(item_ids[pair]),
+            components,
+        )
+
+
 @export("mlfm_predict_dense")
 def mlfm_predict_dense(
     user_embeddings_addr: Int,
@@ -447,45 +471,22 @@ def mlfm_predict_dense(
     pairs: Int,
     components: Int,
     result_addr: Int,
-    workers_arg: Int,
+    start: Int,
+    stop: Int,
 ) abi("C"):
-    var user_embeddings = fp(user_embeddings_addr)
-    var user_biases = fp(user_biases_addr)
-    var item_embeddings = fp(item_embeddings_addr)
-    var item_biases = fp(item_biases_addr)
-    var user_ids = ip(user_ids_addr)
-    var item_ids = ip(item_ids_addr)
-    var result = fp(result_addr)
-    var workers = min(max(workers_arg, 1), pairs)
-
-    @parameter
-    def predict_chunk(worker: Int):
-        var start = worker * pairs // workers
-        var stop = (worker + 1) * pairs // workers
-        for pair in range(start, stop):
-            result[pair] = dense_prediction(
-                user_embeddings,
-                user_biases,
-                item_embeddings,
-                item_biases,
-                Int(user_ids[pair]),
-                Int(item_ids[pair]),
-                components,
-            )
-
-    if workers > 1 and pairs >= PREDICT_PARALLEL_THRESHOLD:
-        sync_parallelize[predict_chunk](workers)
-    else:
-        for pair in range(pairs):
-            result[pair] = dense_prediction(
-                user_embeddings,
-                user_biases,
-                item_embeddings,
-                item_biases,
-                Int(user_ids[pair]),
-                Int(item_ids[pair]),
-                components,
-            )
+    predict_dense_range(
+        fp(user_embeddings_addr),
+        fp(user_biases_addr),
+        fp(item_embeddings_addr),
+        fp(item_biases_addr),
+        ip(user_ids_addr),
+        ip(item_ids_addr),
+        fp(result_addr),
+        pairs,
+        components,
+        start,
+        stop,
+    )
 
 
 @export("mlfm_predict")

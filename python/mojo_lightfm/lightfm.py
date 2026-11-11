@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 import scipy.sparse as sp
 
@@ -9,6 +12,23 @@ from ._lib import addr, lib
 
 CYTHON_DTYPE = np.float32
 _INT32_MAX = np.iinfo(np.int32).max
+_PREDICT_PARALLEL_THRESHOLD = 32_768
+_MIN_PREDICT_CHUNK = 1 << 14
+
+
+def _predict_dense(arguments, pairs: int, num_threads: int) -> None:
+    predict = lib().mlfm_predict_dense
+    if num_threads < 2 or pairs < _PREDICT_PARALLEL_THRESHOLD:
+        predict(*arguments, 0, pairs)
+        return
+    parts = min(num_threads, pairs // _MIN_PREDICT_CHUNK)
+    if parts < 2:
+        predict(*arguments, 0, pairs)
+        return
+    step = -(-pairs // parts)
+    ranges = [(part * step, min((part + 1) * step, pairs)) for part in range(parts)]
+    with ThreadPoolExecutor(max_workers=parts) as pool:
+        list(pool.map(lambda bounds: predict(*arguments, *bounds), ranges))
 
 
 def _check_sparse_int32_range(matrix) -> None:
@@ -470,16 +490,19 @@ class LightFM:
                 item_features, self.item_embeddings, self.item_biases
             )
         result = np.empty(len(user_ids), dtype=np.float32)
-        lib().mlfm_predict_dense(
-            addr(user_embeddings),
-            addr(user_biases),
-            addr(item_embeddings),
-            addr(item_biases),
-            addr(user_ids),
-            addr(item_ids),
+        _predict_dense(
+            (
+                addr(user_embeddings),
+                addr(user_biases),
+                addr(item_embeddings),
+                addr(item_biases),
+                addr(user_ids),
+                addr(item_ids),
+                len(user_ids),
+                self.no_components,
+                addr(result),
+            ),
             len(user_ids),
-            self.no_components,
-            addr(result),
             int(num_threads),
         )
         return result

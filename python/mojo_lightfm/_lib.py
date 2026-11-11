@@ -19,7 +19,7 @@ D = ctypes.c_double
 
 _SIGNATURES = {
     "mlfm_representations": ([I] * 9, None),
-    "mlfm_predict_dense": ([I] * 10, None),
+    "mlfm_predict_dense": ([I] * 11, None),
     "mlfm_predict": ([I] * 17, None),
     "mlfm_score_matrix": ([I] * 9, None),
     "mlfm_fit_epoch": ([I] * 30 + [D] * 5 + [I] * 5, I),
